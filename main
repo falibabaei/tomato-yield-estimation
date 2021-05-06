@@ -1,0 +1,199 @@
+import pandas as pd
+from sklearn.preprocessing import StandardScaler,MinMaxScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+
+import numpy as np
+from numpy.random import seed
+seed(1)
+import random as rn
+rn.seed(1)
+import random
+import tensorflow as tf
+tf.compat.v1.random.set_random_seed(1)
+
+
+
+n_out=1
+seq_len=110
+seq_len_out=1
+hidden_units=64*2*2*2
+dropout_size=0.1
+lr=1e-3
+decay=1e-5
+Batch_size=64
+Epoch=500
+NAME = "yeild_estimation_fadagosa.h5" 
+
+#import the dataset
+dataset='tomato_2010_2020_fadagosa1.csv'
+df=pd.read_csv(dataset)
+#df.dropna(inplace=True)
+
+df.set_index('date', inplace=True)
+#df.drop(['stage'],axis=1,inplace=True)
+df.columns 
+df.dropna(inplace=True)
+df.drop(['Tmin','Tmax', 'Humidity_min',  'Humidity_max','Solar R_Avg'],axis=1 ,inplace=True)
+df.dropna(inplace=True)
+
+#data preprocessing the dataset using MinMax function
+def data_preprocessing(df):
+        values=df.values
+        scaler=MinMaxScaler()
+        values_normal=scaler.fit_transform(values)
+  
+        df=pd.DataFrame(values_normal, columns= df.columns, index=df.index)
+    
+        return df, scaler
+
+
+
+#split the dataset to the input and output of the model
+def data_split(df,train=True):    
+    sequential_data=[]
+    season=[]
+    for index, i in enumerate(df.values):
+        season.append([n for n in i[:-n_out]]) 
+        if len(season)==seq_len:
+            sequential_data.append([np.array(season),i[-n_out]])
+            season.clear()
+            
+        
+        
+    
+    if train:
+        random.shuffle(sequential_data)
+        
+   
+    
+    X=[]
+    Y=[]
+   
+    
+    for seq ,target in sequential_data:
+            
+            X.append(seq) #used for the plot drawing
+            Y.append(target)
+    return  np.array(X),np.array(Y)  
+#first split the data into for supervised learning
+X,Y=data_split(df)
+indices = np.arange(len(X))
+
+#split into training and test set
+X_train, x_test, y_train, y_test,ind1,ind2 = train_test_split(X, Y,indices, test_size=0.3, random_state=42)
+
+#preprocessing the training set
+X_train_reshape=np.reshape(X_train,(X_train.shape[0]*X_train.shape[1],X_train.shape[2]))
+Y_train_reshape=np.concatenate((y_train,np.zeros((X_train.shape[0]*X_train.shape[1])-len(y_train))),axis=0)
+y_train_reshape=Y_train_reshape.reshape(-1, 1)
+data=np.concatenate((X_train_reshape,y_train_reshape),axis=1)
+data=pd.DataFrame(data)
+data, scaler=data_preprocessing(data)
+X_train_minmax=data.values[:,:-1]
+y_train=data.values[:len(y_train),-1] 
+X_train=np.reshape(X_train_minmax,(X_train.shape[0],X_train.shape[1],X_train.shape[2]))
+
+
+#The r_square metric
+def r_square(y_true, y_pred):
+    y_true= tf.convert_to_tensor(y_true, np.float32)
+    SS_res = tf.keras.backend.sum(tf.keras.backend.square( y_true-y_pred ))
+    SS_tot = tf.keras.backend.sum(tf.keras.backend.square( y_true - tf.keras.backend.mean(y_true) ) )
+    return np.array(( 1 - SS_res/(SS_tot + tf.keras.backend.epsilon()) ))
+
+
+#define the model
+def Lstm_model():
+    input1=tf.keras.layers.Input(shape=(X_train.shape[1],X_train.shape[2]))
+    BLSTM=tf.keras.layers.Bidirectional((tf.keras.layers.LSTM(hidden_units, 
+                                    activation='tanh',name='lstm1',return_sequences=True)))(input1)
+    drop=tf.keras.layers.Dropout(dropout_size)(BLSTM)                                
+                                  
+    BLSTM=tf.keras.layers.Bidirectional((tf.keras.layers.LSTM(hidden_units , 
+                                      activation='tanh',name='lstm3',return_sequences=False)))(drop)
+
+    drop=tf.keras.layers.Dropout(dropout_size)(BLSTM)                                   
+    output = tf.keras.layers.Dense(hidden_units, activation='tanh' )(drop)
+    output = tf.keras.layers.Dense(n_out)(output)
+    model = tf.keras.Model(inputs=input1, outputs=output)
+    opt=tf.keras.optimizers.Adam(learning_rate=lr,decay=decay)
+    model.compile(optimizer=opt, loss='mse', metrics=['mae'] )
+    
+    return model
+
+
+#creat the mode1
+model=Lstm_model()
+
+#define the early stoping callbacke 
+Early=tf.keras.callbacks.EarlyStopping(
+    monitor="val_loss",
+    min_delta=0,
+    patience=60, #number of paetiont changed 
+    verbose=1,
+    mode="min",
+    baseline=None,
+    restore_best_weights=True,
+)
+
+
+checkpoint=tf.keras.callbacks.ModelCheckpoint(NAME, monitor="val_loss", mode='min', 
+                                              verbose=1,save_best_only=True)
+
+#train the model
+history=model.fit(X_train,y_train,batch_size=Batch_size,
+                         epochs=Epoch, 
+                         validation_split=0.2,
+                         verbose=2,
+                         shuffle=True,
+                         callbacks=[checkpoint, Early])
+        
+#plot the loss of model during the training        
+import matplotlib.pyplot as plt
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('Model loss')
+plt.ylabel('Loss')
+plt.xlabel('Epoch')
+plt.legend(['Train', 'validation'], loc='upper right')
+plt.show()
+
+#normalize the test set using the sclare from the training set
+x_test_reshape=np.reshape(x_test,(x_test.shape[0]*x_test.shape[1],x_test.shape[2]))
+y_test_reshape=np.concatenate((y_test,np.zeros((x_test.shape[0]*x_test.shape[1])-len(y_test))),axis=0).reshape(-1, 1)
+data1=np.concatenate((x_test_reshape,y_test_reshape),axis=1)
+data1_re=scaler.transform(data1)
+x_test1=data1_re[:,:-1]
+x_test1=np.reshape(x_test1,(x_test.shape[0],x_test.shape[1],x_test.shape[2]))
+
+#making prediction
+yhat = model.predict(x_test1)
+
+#denormalize the prediction
+yhat_reshape=np.concatenate((yhat,np.zeros((x_test.shape[0]*x_test.shape[1]-len(y_test),yhat.shape[1]))),axis=0)
+data2=np.concatenate((x_test_reshape,yhat_reshape),axis=1)
+data1=scaler.inverse_transform(data1_re)
+data2=scaler.inverse_transform(data2)
+inv_y=data1[:len(y_test),-1]
+inv_yhat=data2[:len(y_test),-1]
+    
+
+
+
+
+
+#calculating the r_squre and mean squer error between the true and predicted value
+r=r_square(inv_y,inv_yhat)
+print(f'R_square={r}')       
+  
+
+
+
+print((mean_squared_error(inv_yhat,inv_y)))
+  
+
+
+
+print((mean_squared_error(inv_yhat,inv_y)))
+
