@@ -13,29 +13,35 @@ import tensorflow as tf
 tf.compat.v1.random.set_random_seed(1)
 
 
-
+#define hyperparameters 
+ # number of output which is one in our case
 n_out=1
+#duration of a season
 seq_len=110
-seq_len_out=1
+
+#number of hidden units in each LSTM layer 
 hidden_units=64*2*2*2
 dropout_size=0.1
+#learning rate
 lr=1e-3
+#learning rate decay
 decay=1e-5
 Batch_size=64
+#maximum number of epochs to train the model 
 Epoch=500
+#save the trained model with the name
 NAME = "yeild_estimation_fadagosa.h5" 
 
 #import the dataset
 dataset='tomato_2010_2020_fadagosa1.csv'
 df=pd.read_csv(dataset)
-#df.dropna(inplace=True)
 
+#set index for the dataset
 df.set_index('date', inplace=True)
-#df.drop(['stage'],axis=1,inplace=True)
-df.columns 
+#remove the columns with missing data
 df.dropna(inplace=True)
+#remove the variable with VIF greater than a threshold from the data set
 df.drop(['Tmin','Tmax', 'Humidity_min',  'Humidity_max','Solar R_Avg'],axis=1 ,inplace=True)
-df.dropna(inplace=True)
 
 #data preprocessing the dataset using MinMax function
 def data_preprocessing(df):
@@ -49,7 +55,7 @@ def data_preprocessing(df):
 
 
 
-#split the dataset to the input and output of the model
+#split the dataset to the input and output for supervised learning
 def data_split(df,train=True):    
     sequential_data=[]
     season=[]
@@ -76,26 +82,33 @@ def data_split(df,train=True):
             X.append(seq) #used for the plot drawing
             Y.append(target)
     return  np.array(X),np.array(Y)  
-#first split the data into for supervised learning
+    
+#first split the data for supervised learning using the data_split function
 X,Y=data_split(df)
 indices = np.arange(len(X))
 
 #split into training and test set
 X_train, x_test, y_train, y_test,ind1,ind2 = train_test_split(X, Y,indices, test_size=0.3, random_state=42)
 
-#preprocessing the training set
+#concatenate the X_train and Y_train to do data preprocessing on the training data set
+
 X_train_reshape=np.reshape(X_train,(X_train.shape[0]*X_train.shape[1],X_train.shape[2]))
 Y_train_reshape=np.concatenate((y_train,np.zeros((X_train.shape[0]*X_train.shape[1])-len(y_train))),axis=0)
 y_train_reshape=Y_train_reshape.reshape(-1, 1)
 data=np.concatenate((X_train_reshape,y_train_reshape),axis=1)
 data=pd.DataFrame(data)
+
+#preprocessing the training set
+
 data, scaler=data_preprocessing(data)
+
+#split the preprocessed data into the training variable and label
 X_train_minmax=data.values[:,:-1]
 y_train=data.values[:len(y_train),-1] 
 X_train=np.reshape(X_train_minmax,(X_train.shape[0],X_train.shape[1],X_train.shape[2]))
 
 
-#The r_square metric
+#The r2_square metric for evaluating the model
 def r_square(y_true, y_pred):
     y_true= tf.convert_to_tensor(y_true, np.float32)
     SS_res = tf.keras.backend.sum(tf.keras.backend.square( y_true-y_pred ))
@@ -123,7 +136,7 @@ def Lstm_model():
     return model
 
 
-#creat the mode1
+#creat the mode1 using Lstm_model function
 model=Lstm_model()
 
 #define the early stoping callbacke 
@@ -137,11 +150,11 @@ Early=tf.keras.callbacks.EarlyStopping(
     restore_best_weights=True,
 )
 
-
+#define the checkpoint callback to save the model with the best validation lost
 checkpoint=tf.keras.callbacks.ModelCheckpoint(NAME, monitor="val_loss", mode='min', 
                                               verbose=1,save_best_only=True)
 
-#train the model
+#train the model 
 history=model.fit(X_train,y_train,batch_size=Batch_size,
                          epochs=Epoch, 
                          validation_split=0.2,
@@ -159,20 +172,27 @@ plt.xlabel('Epoch')
 plt.legend(['Train', 'validation'], loc='upper right')
 plt.show()
 
-#normalize the test set using the sclare from the training set
+#now testing the trained model
+
+#concatenate the x_test and y_train to do data preprocessing on the test set
 x_test_reshape=np.reshape(x_test,(x_test.shape[0]*x_test.shape[1],x_test.shape[2]))
 y_test_reshape=np.concatenate((y_test,np.zeros((x_test.shape[0]*x_test.shape[1])-len(y_test))),axis=0).reshape(-1, 1)
 data1=np.concatenate((x_test_reshape,y_test_reshape),axis=1)
+
+#normalize the test set using the Min-Max sclare from the training set
 data1_re=scaler.transform(data1)
 x_test1=data1_re[:,:-1]
 x_test1=np.reshape(x_test1,(x_test.shape[0],x_test.shape[1],x_test.shape[2]))
 
-#making prediction
+#making prediction using the trained model
 yhat = model.predict(x_test1)
 
-#denormalize the prediction
+#denormalize the prediction to evaluate the model 
+#first concatenate the prediction with the x_test_reshape 
 yhat_reshape=np.concatenate((yhat,np.zeros((x_test.shape[0]*x_test.shape[1]-len(y_test),yhat.shape[1]))),axis=0)
 data2=np.concatenate((x_test_reshape,yhat_reshape),axis=1)
+
+#denormalize the prediction and y_true
 data1=scaler.inverse_transform(data1_re)
 data2=scaler.inverse_transform(data2)
 inv_y=data1[:len(y_test),-1]
@@ -186,14 +206,9 @@ inv_yhat=data2[:len(y_test),-1]
 #calculating the r_squre and mean squer error between the true and predicted value
 r=r_square(inv_y,inv_yhat)
 print(f'R_square={r}')       
-  
-
-
-
 print((mean_squared_error(inv_yhat,inv_y)))
   
 
 
 
-print((mean_squared_error(inv_yhat,inv_y)))
 
